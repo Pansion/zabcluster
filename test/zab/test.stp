@@ -1,3 +1,0 @@
-probe process("whiteboard").function("*").call {
-   log (probefunc()." ".$$parms)
-}
