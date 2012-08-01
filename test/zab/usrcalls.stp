@@ -1,0 +1,39 @@
+#! /usr/bin/env stap
+#
+#
+
+global usr_func
+global starttime,timebycall
+
+probe begin {
+	printf("Collecting data - type Ctrl-C to print output and exit...\n")
+}
+
+probe process(@1).function("*").call{
+    usr_func[probefunc()]++
+    starttime[probefunc()] = gettimeofday_ns()
+}
+
+probe process(@1).function("*").return{
+    delta = gettimeofday_ns() - starttime[probefunc()]
+    timebycall[probefunc()]<<<delta
+    delete starttime[probefunc()]
+}
+
+function print_header() {
+	printf("%22s %10s %12s %12s %12s %12s\n",
+	       "User Call", "Count", "Total ms",
+	       "Avg ns", "Min ns", "Max ns")
+}
+
+probe end {
+    print_header()
+    foreach (func in usr_func-){
+        printf("%22s %10d %12d %12d %12d %12d\n", func,
+               @count(timebycall[func]),
+               @sum(timebycall[func])/1000000,
+               @avg(timebycall[func]),
+               @min(timebycall[func]),
+               @max(timebycall[func]))    
+    }
+}
