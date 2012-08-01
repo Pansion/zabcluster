@@ -4,9 +4,18 @@ zabcluster
 A c++ implementation of multi-master cluster based on ZAB(zookeeper) and Redis.
 
 Introduction
-  I have inerests in Paxos/Zab which were used to keep data consistent. Then I found Apache Zookeeper which was successul and popular in the area. Since I am not a expert on Java, I searched for a similar implmentation in C or C++ but failed. Actually zabcluster was a kind of C++ version of Apache Zookeeper.It provide same feature as leader election/zab/HA of zookeeper. 
+  I have inerests in Paxos/Zab which were used to keep data consistent. 
+  Then I found Apache Zookeeper which was successul and popular in the area. 
+  Since I am not a expert on Java, I searched for a similar implmentation in C or C++ but failed. 
+  Actually zabcluster was a kind of C++ version of Apache Zookeeper.
+  It provide same feature as leader election/zab/HA of zookeeper. 
+  
   And with difference:
-  1.much less threads. Zookeeper have bunch of threads for election/request handling. e.g. If you have N nodes, there will be 2*(N-1) threads in each node which were only used for election. During my tests, I can only run ~17 instance of zookeeper in a single host(alright, my desktop was really old and slow). But for zabcluster, I can run 55 instances in same machine.
+  1.much less threads. 
+    Zookeeper have bunch of threads for election/request handling. 
+    e.g. If you have N nodes, there will be 2*(N-1) threads in each node which were only used for election. 
+    During my tests, I can only run ~17 instance of zookeeper in a single host(alright, my desktop was really old and slow). 
+    But for zabcluster, I can run 55 instances in same machine.
   2.support redis client.
   3.support redis server as storage.
   4.support much more clients.
@@ -75,7 +84,8 @@ How to use
     
 
 Performance
-  In my desktop(yes, old and slow), running 3 instances(zabcluster and redis-server) at same time, "set" could reach 6~8k with latency 20~30ms, "get" could reach 30k with latency ~5ms.
+  In my desktop(yes, old and slow), running 3 instances(zabcluster and redis-server) at same time, 
+  "set" could reach 6~8k with latency 20~30ms, "get" could reach 30k with latency ~5ms.
   
   If you have better environment for performance testing, please share results with me.
   
@@ -83,11 +93,13 @@ Known issues
   1.Do not support PING_INLINE of redis-benchmark
   2.If redis-server was shutdown, zabcluster will not quit while it will also not process any new request
     I am still investgating solution to handle this case.
-  3.No automatic sync between leader/follower. If a node failed and want to re-join cluster, you should first use redis "sync" command to get latest data from leader redis-server.
+  3.No automatic sync between leader/follower. 
+    If a node failed and want to re-join cluster, you should first use redis "sync" command to get latest data from leader redis-server.
 
 Todo
   1.add automatic sync between leader/follower
   2.redis was a server. make redis a storage of zabcluster required additonal efforts to handle network connection.
-  A embedded database like leveldb or bdb may be a better choice for the storage of zabcluster. I am considering add leveldb support in later time.
+  A embedded database like leveldb or bdb may be a better choice for the storage of zabcluster. 
+  I am considering add leveldb support in later time.
   
   Any other request are welcome.
