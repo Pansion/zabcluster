@@ -26,7 +26,7 @@ But for zabcluster, I can run 55 instances in same machine.
 * support much more clients.
   
 ##Dependency
-Of course, redis-server should placed in your host.
+Of course, redis-server should be placed in your host.
 redis
 https://github.com/antirez/redis
   
