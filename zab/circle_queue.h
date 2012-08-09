@@ -56,6 +56,15 @@ namespace ZABCPP {
         return i_popFront();
       }
 
+      Type * Front() {
+        AutoLock guard(queueLock);
+        Type * ret = NULL;
+        if (len != 0) {
+          ret = (i_Queue)[start];
+        }
+        return ret;
+      }
+
       bool Empty() {
         AutoLock guard(queueLock);
         return (len == 0);
@@ -85,6 +94,7 @@ namespace ZABCPP {
           (i_Queue)[start] = node;
         }
       }
+
       Type * i_popFront() {
         Type * ret = NULL;
         if (len != 0) {

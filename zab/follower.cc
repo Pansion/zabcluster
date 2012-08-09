@@ -200,8 +200,8 @@ namespace ZABCPP {
           } else if (newEpoch == peerEpoch) {
             peerEpoch = -1;
           } else if (newEpoch < self->getAcceptedEpoch()) {
-            ERROR(
-                "Proposed leader epoch "<< ZxidUtils::ZxidToString(newEpoch) <<" is less than our accepted epoch "<<ZxidUtils::ZxidToString(self->getAcceptedEpoch()));
+            ERROR("Proposed leader epoch "<< ZxidUtils::ZxidToString(newEpoch)
+            <<" is less than our accepted epoch "<<ZxidUtils::ZxidToString(self->getAcceptedEpoch()));
             needBreak = true;
             close(fd);
             event_base_loopbreak(ebase);
@@ -212,8 +212,8 @@ namespace ZABCPP {
           ack.type = ACKEPOCH;
           ack.zxid = self->getLastZxid();
           ack.payload.WriteInt64(peerEpoch);
-          INFO(
-              "send ACKEPOCH to leader: zxid "<<ZxidUtils::HexStr(ack.zxid) <<" my Epoch "<<peerEpoch<<" move state to F_NEW_EPOCH_ACK");
+          INFO("send ACKEPOCH to leader: zxid "<<ZxidUtils::HexStr(ack.zxid)
+          <<" my Epoch "<<peerEpoch<<" move state to F_NEW_EPOCH_ACK");
           sendQp(ack, fd);
         } else {
           ERROR("Invalid packet when waiting for NEW EPOCH, expected type " <<LEADERINFO<<" but we got "<<qp.type<<" ,quit");

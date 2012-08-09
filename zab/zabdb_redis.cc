@@ -485,6 +485,7 @@ namespace ZABCPP {
     if (eZxid != NULL) {
       event_del(eZxid);
       event_free(eZxid);
+      eZxid = NULL;
     }
     event_base_loopbreak(ebase);
   }

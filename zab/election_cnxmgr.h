@@ -23,8 +23,8 @@
 //(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 //SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef ELECTION_CNXMGR_HXX_
-#define ELECTION_CNXMGR_HXX_
+#ifndef ELECTION_CNXMGR_H_
+#define ELECTION_CNXMGR_H_
 
 #include <map>
 #include <list>
@@ -41,17 +41,7 @@
 
 using namespace std;
 
-//todo, we need to find a way to make thread stop gracefully
-// in order to acheive this, we should using poll everywhere
-// which enable us to use pipe to wake up a thread and die
-
-namespace ZABCPP {
-
-  class QuorumCnxMgr;
-
-  static const int MAX_PEER_NUM = 1024;
-
-  typedef map<int64, ByteBuffer*> lastMessageMap;
+namespace ZABCPP{
 
   class Message {
     public:
@@ -59,141 +49,36 @@ namespace ZABCPP {
       int64 sid;
   };
 
-  typedef CircleQueue<ByteBuffer>  CircleByteBufferQueue;
-  typedef CircleQueue<Message>     CircleMessageQueue;
-
-  class SendWorker: public Thread {
+  typedef CircleQueue<ByteBuffer>                 CircleByteBufferQueue;
+  //merged recvworker/listener/sendworker into one thread.
+  class QuorumCnxMgr : public Thread{
     public:
-      SendWorker();
-      ~SendWorker();
+      QuorumCnxMgr(QuorumPeerConfig* Cfg);
+      ~QuorumCnxMgr();
 
-      static void OnLibEventNotification(evutil_socket_t fd, short what, void *arg);
-      static void OnWakeup(evutil_socket_t fd, short what, void *arg);
+      void toSend(int64 sid, ByteBuffer* buf);
+      void connectAll();
+      void connectOne(int64 sid);
 
-      bool IsAllDelivered();
-      void AddPeer(int sock, int64 sid);
-      void RemovePeer(int sock);
+      Message* pollRecvQueue(int64 max_time_in_ms);
+      void addToRecvQueue(Message* msg);
+      bool haveDelivered();
+      void wakeupRecvQueue();
 
-      void SendMsg(int64 sid, ByteBuffer * m) {
-        getQueue(sid)->PushBack(m);
-        msgReady(sid);
+      QuorumPeerConfig* getPeerConfig() const {
+        return peerConfig;
       }
-    protected:
-      virtual void Init();
-      virtual void Run();
-      virtual void CleanUp();
-      virtual void ShuttingDown();
-    private:
-      void OnCanSend(int64 sid);
 
-      void msgReady(int64 sid);
 
-      //lock free;
-      void setLastMsg(int64 sid, ByteBuffer* m);
-      ByteBuffer* getLastMsg(int64 sid);
-      void i_sendMsg(int sock, int64 sid, ByteBuffer* msg);
-      void cleanAllLastMsg();
+      void clearRecvQueue() {
+        recvQueue.Clear();
+      }
 
-      //lock needed
-      int64 getSid(int sock);
-      int getSock(int64 sid);
-      CircleByteBufferQueue* getQueue(int64 sid);
-      void cleanAllQueue();
-
-      bool setupPipe(int * pipeA);
-      void cleanupPipe(int * pipeA);
-      void cleanupEvents();
-    private:
-      enum {
-        PIPE_OUT = 0,
-        PIPE_IN
-      };
-      struct event_base* ebase;
-      int wakeup_pipe[2];
-      int msg_pipe[2];
-
-      typedef map<int64, CircleByteBufferQueue*> sendQueueMap;
-      typedef map<int64, int> sid2SockMap;
-      typedef map<int, int64> sock2SidMap;
-      typedef map<int64, ByteBuffer*> lastMessageMap;
-      typedef pair<int64, ByteBuffer*> lastMsgPair;
-      typedef set<int64> lastMsgFlag;
-      typedef set<struct event *>     EventSet;
-      sid2SockMap i_sid2SockMap;
-      sock2SidMap i_sock2SidMap;
-      sendQueueMap i_sendQueueMap;
-      lastMessageMap i_lastMessageSent;
-      lastMsgFlag i_lastMsgFlag;
-      EventSet    i_eventSet;
-      Lock mapLock;
-      Lock sendQueueLock;
-  };
-
-  //--------------------Recv Worker----------------
-  class RecvWorker: public Thread {
     public:
-      RecvWorker(QuorumCnxMgr* pMgr);
-      ~RecvWorker();
-
+      //interfaces to libevent
       static void OnLibEventNotification(evutil_socket_t fd, short what, void *arg);
-      static void OnWakeup(evutil_socket_t fd, short what, void *arg);
 
-      void AddPeer(int sock, int64 sid);
-      void RemovePeer(int sock);
-      bool IsConExists(int64 sid) {
-        AutoLock guard(mapLock);
-        return (i_conSet.find(sid) != i_conSet.end());
-      }
-    protected:
-      virtual void Init();
-      virtual void Run();
-      virtual void CleanUp();
-      virtual void ShuttingDown();
-    private:
-      void onRecvMsg(int fd);
-
-      void processMsg(int fd, string*);
-
-      string* getSockBuf(int fd);
-      void removeSockBuf(int fd);
-
-      void cleanupEvents();
-      void cleanupSockBuf();
-
-    private:
-      enum {
-        PIPE_OUT = 0,
-        PIPE_IN
-      };
-      QuorumCnxMgr* pCnxMgr;
-      struct event_base* ebase;
-      int wakeup_pipe[2];
-
-      typedef map<int, struct event*> eventMap;
-      typedef pair<int, struct event*> eventMapPair;
-      typedef map<int, int64> Sock2SidMap;
-      typedef map<int, string*> SockBufMap;
-      typedef set<int64> conSet;
-      eventMap eMap;
-      Sock2SidMap i_sock2SidMap;
-      SockBufMap  i_sockBufMap;
-      conSet i_conSet;
-      Lock mapLock;
-      DISALLOW_COPY_AND_ASSIGN(RecvWorker);
-  };
-
-//----------------------Listener---------------
-  //todo should we use libevent for listener????
-  class Listener: public Thread {
-    public:
-      Listener(QuorumCnxMgr* pMgr)
-          : Thread("Net Listener"), pCnxMgr(pMgr), ebase(NULL), numRetries(0) {
-        wakeup_pipe[PIPE_OUT] = -1;
-        wakeup_pipe[PIPE_IN] = -1;
-      }
-      ~Listener();
-
-      static void OnLibEventNotification(evutil_socket_t fd, short what, void *arg);
+      static void OnSendingMsgReady(evutil_socket_t fd, short what, void *arg);
 
       static void OnLibEventListenerNotify(struct evconnlistener *listener, evutil_socket_t fd, struct sockaddr *address,
           int socklen, void *ctx);
@@ -201,87 +86,106 @@ namespace ZABCPP {
       static void OnLibEventListenerError(struct evconnlistener *listener, void *ctx);
 
       static void OnWakeup(evutil_socket_t fd, short what, void *arg);
+
+
     protected:
       virtual void Init();
       virtual void Run();
       virtual void CleanUp();
       virtual void ShuttingDown();
+
     private:
+      //called when new connection come in
       void onAccept(int sock);
+
+      //called when accept/listen error occurs
       void onError();
+
+      //called when fd can read
       void onRecvMsg(int sock);
 
-      void addEvent(int sock);
-      void removeEvent(int sock);
+      //called when send queue have message
+      void onMsgReady(int64 sid);
 
-      string* getSockBuf(int sock);
-      void removeSockBuf(int sock);
-
-      void cleanupEvents();
-      void cleanupSockBuf();
+      //called when fd can write
+      void onMsgCandSend(int fd);
     private:
+      typedef CircleQueue<Message>                    CircleMessageQueue;
+      typedef map<int64, ByteBuffer*>                 LastMessageMap;
+      typedef set<int64>                              LastMsgFlag;
+      typedef map<int64, CircleByteBufferQueue*>      SendQueueMap;
+      typedef map<int64, int>                         Sid2SockMap;
+      typedef map<int, int64>                         Sock2SidMap;
+      typedef map<int, struct event*>                 EventMap;
+      typedef map<int, string*>                       SockBufMap;
+
       enum {
         PIPE_OUT = 0,
-        PIPE_IN = 1
+        PIPE_IN
       };
-      QuorumCnxMgr* pCnxMgr;
-      struct event_base* ebase;
-      int numRetries;
-      int wakeup_pipe[2];
-
-      typedef map<int, struct event*>  EventMap;
-      typedef map<int, string*>        SockBuf;
-      EventMap                        eventMap;
-      SockBuf                         sockBuf;
-
-      DISALLOW_COPY_AND_ASSIGN(Listener);
-  };
-
-  //-------------------------QuorumCnxMgr------------------------
-
-  class QuorumCnxMgr {
-    public:
-      QuorumCnxMgr(QuorumPeerConfig* Cfg);
-      ~QuorumCnxMgr();
-
-      void Start();
-      void Stop();
-      void toSend(int64 sid, ByteBuffer* buf);
-      void connectAll();
-      void connectOne(int64 sid);
-      bool initiateConnection(int sock, int64 sid);
-      bool receiveConnection(int sock, int64 sid);
-      Message* pollRecvQueue(int64 max_time_in_ms);
-      void addToRecvQueue(Message* msg);
-
-      QuorumPeerConfig* getPeerConfig() const {
-        return peerConfig;
-      }
-
-      bool haveDelivered() {
-        return i_SendWorker.IsAllDelivered();
-      }
-
-      void clearRecvQueue() {
-        i_recvQueue.Clear();
-      }
     private:
-      bool isConExists(int64 sid);
-      void setupNewCon(int sock, int64 sid);
-    private:
-      CircleMessageQueue i_recvQueue;
+      void processMsg(int sock, string* buf, int64 sid);
+      void initiateConnection(int sock, int64 sid);
 
+      void addConnection(int fd);
+      void removeConnection(int fd);
+      void handleNewConnection(int fd);
+
+      void addPeer(int fd, int64 sid);
+      void removePeer(int fd);
+      bool getLastMsgFlag(int64 sid);
+
+      void msgReady(int64 sid);
+
+      //lock free;
+      void setLastMsg(int64 sid, ByteBuffer* m);
+      ByteBuffer* getLastMsg(int64 sid);
+
+      int64 getSid(int sock);
+      int getSock(int64 sid);
+
+      string * getSockBuf(int sock);
+      void removeSockBuf(int sock);
+
+
+      CircleByteBufferQueue* getQueue(int64 sid);
+
+      void addWriteEvent(int fd);
+      void removeWriteEvent(int fd);
+
+      void setupPipe(int * pipeA);
+      void cleanupPipe(int * pipeA);
+      void cleanupSockBuf();
+      void cleanupEvents(EventMap & eMap);
+      void cleanupAllSendQueue();
+      void cleanupRecvQueue();
+      void cleanupLastMsg();
+
+    private:
       QuorumPeerConfig* peerConfig;
+      struct event_base* ebase;
+      int wakeup_pipe[2];
+      int msg_pipe[2];
+      int numRetries;
 
-      Listener i_Listener;
-      RecvWorker i_RecvWorker;
-      SendWorker i_SendWorker;
+      EventMap  eventMap;
+      EventMap  wEventMap;
+      //recv queue
+      CircleMessageQueue recvQueue;
 
+      SockBufMap  sockBufMap;
+      Sid2SockMap sid2SockMap;
+      Sock2SidMap sock2SidMap;
+      SendQueueMap sendQueueMap;
+      LastMessageMap lastMessageSent;
+      LastMsgFlag lastMsgFlag;
       Lock connectLock;
+      Lock sendQueueLock;
+      Lock eventLock;
+      Lock peerLock;
       WaitableEvent     weRecv;
       DISALLOW_COPY_AND_ASSIGN(QuorumCnxMgr);
   };
 }
-;
 
-#endif /* ELECTION_CNXMGR_HXX_ */
+#endif /* ELECTION_CNXMGR_H_ */

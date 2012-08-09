@@ -148,7 +148,7 @@ void Thread::ThreadMain() {
     Run();
 
 //    // Let the thread do extra cleanup.
-//    CleanUp();
+    CleanUp();
 //
 //    // Assert that MessageLoop::Quit was called by ThreadQuitTask.
 //    DCHECK(GetThreadWasQuitProperly());

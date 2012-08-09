@@ -120,6 +120,7 @@ namespace ZABCPP {
       virtual void Shutdown() {
         stop = true;
         i_nQueue.WakeUp();
+        recvWorker.Stop();
       }
 
       FastPaxosElection(QuorumPeer* myself, QuorumCnxMgr * mgr)
@@ -131,7 +132,6 @@ namespace ZABCPP {
       }
 
       virtual ~FastPaxosElection() {
-
       }
 
       void getVote(Vote& v) {
@@ -178,7 +178,7 @@ namespace ZABCPP {
           virtual void Run();
           virtual void ShuttingDown(){
             INFO("Task:"<<thread_name()<<" id:"<<thread_id()<<", Wake up and quit");
-            i_nQueue->WakeUp();
+            cnxMgr->wakeupRecvQueue();
           }
 
         private:

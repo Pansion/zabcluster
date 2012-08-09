@@ -86,6 +86,7 @@ namespace ZABCPP {
           Vote v;
           i_el->getVote(v);
           ByteBuffer* buf = new ByteBuffer();
+          buf->WriteInt32(sizeof(int32)+sizeof(int64)*4);
           buf->WriteInt32((int32) self->getPeerState());
           buf->WriteInt64(v.id);
           buf->WriteInt64(v.zxid);
@@ -106,6 +107,7 @@ namespace ZABCPP {
           <<" leader="<<ZxidUtils::HexStr(current.id));
 
           ByteBuffer* buf = new ByteBuffer();
+          buf->WriteInt32(sizeof(int32) + sizeof(int64)*4);
           buf->WriteInt32((int32) self->getPeerState());
           buf->WriteInt64(current.id);
           buf->WriteInt64(current.zxid);
@@ -197,6 +199,7 @@ namespace ZABCPP {
           <<ZxidUtils::HexStr(self->getId())<<" (myid),"
           <<ZxidUtils::HexStr(proposedEpoch)<<" (n.peerEpoch)");
       ByteBuffer * n = new ByteBuffer();
+      n->WriteInt32(sizeof(int32)+sizeof(int64)*4);
       n->WriteInt32((int32) self->getPeerState());
       n->WriteInt64(proposedLeader);
       n->WriteInt64(proposedZxid);
@@ -226,6 +229,10 @@ namespace ZABCPP {
     while ((self->getPeerState() == LOOKING) && (!stop)) {
       Notification n;
       bool ret = i_nQueue.pollQueue(notTimeout * 1000, n);
+
+      if (stop) {
+        break;
+      }
 
       if (!ret) {
         if (cnxMgr->haveDelivered()) {

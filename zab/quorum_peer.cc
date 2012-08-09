@@ -177,21 +177,29 @@ namespace ZABCPP {
   }
 
   void QuorumPeer::CleanUp() {
+
+    INFO("Deleting election instance");
     if (electionAlg != NULL) {
       delete electionAlg;
     }
+
+    INFO("Stop quorum cnx mgr");
+
     qcnxMgr.Stop();
 
+    INFO("Deleting leader instance");
     if (leader != NULL) {
       delete leader;
       leader = NULL;
     }
 
+    INFO("Deleting follower instance");
     if (follower != NULL) {
       delete follower;
       follower = NULL;
     }
 
+    INFO("Shutdown ZAB db instance");
     if (zDb != NULL) {
       zDb->Shutdown();
       delete zDb;
