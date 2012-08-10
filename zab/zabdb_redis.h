@@ -68,6 +68,7 @@ namespace ZABCPP{
       typedef map<int, int>   ChannelMap;
       typedef map<int, struct event*> EventMap;
       typedef list<Request*>  RequestList;
+//      typedef map<int, string*> ClientReplyMap;
 
     private:
       int setupServerChannel(int clientfd);
@@ -85,6 +86,22 @@ namespace ZABCPP{
       void onRecvMsg(int fd);
       void onMsgReady(int fd);
       void onSendReady(int fd);
+
+      void addServerRetryWEvent(int fd);
+      void removeServerRetryWEvent(int fd);
+
+      int sendRequest(int fd, Request *r);
+
+//todo we will met EAGAIN when send reply back to client
+// need to find a way to re-send those reply
+//      //EV_WRITE event map for client reply
+//      void addClientWEvent(int fd);
+//      void removeClientWEvent(int fd);
+//
+//      //reply buffer which need to send to client;
+//      string* getClientReply(int fd);
+//      void removeClientReply(int fd);
+
 
       //zxid was very important since it will impact leader election
       //we have sepical handling for zxid at startup
@@ -134,6 +151,9 @@ namespace ZABCPP{
 
       EventMap                eventMap;
       EventMap                retryEventMap;
+
+//      ClientReplyMap          clientReplyMap;
+//      EventMap                clientWEventMap;
 
       RequestList             requestList;
       RequestList             retryRequestList;

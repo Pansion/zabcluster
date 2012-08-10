@@ -310,22 +310,8 @@ namespace ZABCPP {
       }
 
       if (serverfd != -1) {
-        int nwrite = send(serverfd, r->request.Data(), r->request.Length(), 0);
-        //get error when sending request
-        if (nwrite < 0 ){
-          int err = EVUTIL_SOCKET_ERROR();
-          ERROR("Error on sending request "<<ZxidUtils::HexStr(r->zxid)
-             <<" on sock "<<serverfd<<", error " <<err
-             <<" ("<<evutil_socket_error_to_string(err)<<")");
-
-          if (err == EAGAIN) {
-            retryRequestList.push_back(r);
-            //create EV_WRITE event and let kernel tell us when could I send message
-            struct event * e = event_new(ebase, serverfd, EV_WRITE|EV_PERSIST, &ZabDBRedis::OnLibEventNotification, this);
-            event_add(e, NULL);
-            retryEventMap[serverfd] = e;
-            return;
-          }
+        int nwrite = sendRequest(serverfd, r);
+        if (nwrite < 0) {
           //todo, we find one connection to redis was down
           //in this case, we should not handle any new request otherwise
           //data will not consistent. We have to decide
@@ -333,17 +319,15 @@ namespace ZABCPP {
           //2.should we just retry connecting redis and repost request
           //The safest way was to shutdown server
           handleServerDown(serverfd);
+          return;
         } else if (nwrite < (int)r->request.Length()) {
-          //EGAIN or only partial packet was sent to redis
-          //register EV_WRITE and try to re-send request;
-          DEBUG("Only sent "<<nwrite<<" ,required to send "<<r->request.Length()<<" add to retry list");
+          //request was not sent to redis successfully
+          // put it in retry list and do not handle new request
           r->request.Shift(nwrite);
           retryRequestList.push_back(r);
-          struct event * e = event_new(ebase, serverfd, EV_WRITE|EV_PERSIST, &ZabDBRedis::OnLibEventNotification, this);
-          event_add(e, NULL);
-          retryEventMap[serverfd] = e;
+          addServerRetryWEvent(serverfd);
           return;
-        } else if (nwrite == (int)r->request.Length()) {
+        } else {
           //we have send all packet to redis
           //update zxid then
           updateZxid(r->zxid);
@@ -361,15 +345,46 @@ namespace ZABCPP {
     }
   }
 
+  void ZabDBRedis::addServerRetryWEvent(int fd) {
+    EventMap::iterator iter = retryEventMap.find(fd);
+    if (iter == retryEventMap.end()) {
+      struct event *e = event_new(ebase, fd, EV_WRITE|EV_PERSIST, &ZabDBRedis::OnLibEventNotification, this);
+      event_add(e, NULL);
+      retryEventMap.insert(pair<int, struct event*>(fd, e));
+    }
+  }
+
+  void ZabDBRedis::removeServerRetryWEvent(int fd) {
+    EventMap::iterator iter = retryEventMap.find(fd);
+    if (iter != retryEventMap.end()) {
+      struct event *e = iter->second;
+      if (e != NULL) {
+        event_del(e);
+        event_free(e);
+      }
+      retryEventMap.erase(iter);
+    }
+  }
+  int ZabDBRedis::sendRequest(int fd, Request *r) {
+    int nwrite = send(fd, r->request.Data(), r->request.Length(), 0);
+    if (nwrite < 0 ) {
+      int err = EVUTIL_SOCKET_ERROR();
+      ERROR("Error on sending request "<<ZxidUtils::HexStr(r->zxid)
+         <<" on sock "<<fd<<", error " <<err
+         <<" ("<<evutil_socket_error_to_string(err)<<")");
+
+      if (err == EAGAIN) {
+        nwrite = 0;
+      }
+    }
+    return nwrite;
+  }
+
   void ZabDBRedis::onSendReady(int fd) {
     if (!retryRequestList.empty()){
       Request * r = retryRequestList.front();
-      int nwrite = send(fd, r->request.Data(), r->request.Length(), 0);
-      if (nwrite < 0) {
-        int err = EVUTIL_SOCKET_ERROR();
-        ERROR("Error on sending request "<<ZxidUtils::HexStr(r->zxid)
-           <<" on sock "<<fd<<", error " <<err
-           <<" ("<<evutil_socket_error_to_string(err)<<")");
+      int nwrite = sendRequest(fd, r);
+      if (nwrite < 0 ) {
         //todo, we find one connection to redis was down
         //in this case, we should not handle any new request otherwise
         //data will not consistent. We have to decide
@@ -379,7 +394,6 @@ namespace ZABCPP {
         handleServerDown(fd);
       } else if (nwrite < (int)r->request.Length()) {
         r->request.Shift(nwrite);
-        return;
       } else {
         INFO("re-send request "<<ZxidUtils::HexStr(r->zxid)<<" to redis successfully");
 
@@ -387,15 +401,7 @@ namespace ZABCPP {
         updateZxid(r->zxid);
         retryRequestList.pop_front();
         //finally we have send all data to redis
-        EventMap::iterator iter = retryEventMap.find(fd);
-        if (iter != retryEventMap.end()) {
-          struct event *e = iter->second;
-          if (e != NULL) {
-            event_del(e);
-            event_free(e);
-          }
-          retryEventMap.erase(iter);
-        }
+        removeServerRetryWEvent(fd);
         delete r;
       }
     }
@@ -459,7 +465,7 @@ namespace ZABCPP {
     char buf[READ_BUF_LEN];
     memset(buf, 0, READ_BUF_LEN);
     int readnum = recv(fd, buf, READ_BUF_LEN, 0);
-    if (readnum == -1) {
+    if (readnum < 0) {
       int err = EVUTIL_SOCKET_ERROR();
       ERROR("Got an error "<<err<<" ("<<evutil_socket_error_to_string(err)<<") on the ZabDBRedis.");
       if (err == EAGAIN) {
