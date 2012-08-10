@@ -191,9 +191,20 @@ namespace ZABCPP {
         event_del(e);
         event_free(e);
       }
-      close(iter->first);
       eventMap.erase(iter);
     }
+
+    EventMap::iterator iterW = retryEventMap.find(serverfd);
+    if (iterW != retryEventMap.end()) {
+      struct event * e = iter->second;
+      if (e != NULL) {
+        event_del(e);
+        event_free(e);
+      }
+      retryEventMap.erase(iterW);
+    }
+
+    close(serverfd);
   }
 
   void ZabDBRedis::removeChannelByClientFd(int clientfd) {
@@ -202,14 +213,18 @@ namespace ZABCPP {
       INFO("removed channel client "<<clientfd<<"---"<<serverfd<<" server");
       removeChannelEvent(serverfd);
     }
-    close(clientfd);
+    //let client_cnxmgr to handle socket close
+    //here we just remove channel
+    //close(clientfd);
   }
 
   void ZabDBRedis::removeChannelByServerFd(int serverfd) {
     int clientfd = 0;
     if (removeChannel(server2Client, serverfd, client2Server, clientfd)) {
       INFO("removed channel client "<<clientfd<<"---"<<serverfd<<" server");
-      close(clientfd);
+      //let client_cnxmgr to handle socket close
+      //here we just remove channel
+      //close(clientfd);
     }
     removeChannelEvent(serverfd);
   }
