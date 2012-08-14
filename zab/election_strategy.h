@@ -40,6 +40,7 @@ namespace ZABCPP {
   } ElectionStrategy;
 
   class QuorumPeer;
+
   class Election {
     public:
       virtual Vote lookForLeader() = 0;
@@ -60,94 +61,24 @@ namespace ZABCPP {
       ;
   };
 
-  class NotificationQ {
+  //--------------------------FastPaxoElection-----------
+  //The concrete election object should handle
+  //1.election logic which inherit from parent Election
+  //2.election message received from other peer which inherited from ElectionMsgHandlerInterface
+
+  class FastPaxosElection: public Election,
+                           public ElectionMsgHandlerInterface{
     public:
-      NotificationQ()
-          : condQueue(&queueLock) {
+      FastPaxosElection(QuorumPeer* myself, QuorumCnxMgr * mgr);
+      virtual ~FastPaxosElection();
 
-      }
-      ~NotificationQ() {
-
-      }
-      void PushBack(const Notification& n) {
-        AutoLock guard(queueLock);
-        bool needSignal = i_Queue.empty();
-        i_Queue.push_back(n);
-        if (needSignal)
-          condQueue.Broadcast();
-      }
-
-      bool pollQueue(int64 ms, Notification& out_n) {
-        bool ret = false;
-        AutoLock guard(queueLock);
-        if (i_Queue.empty()) {
-          if (0 < ms) {
-            condQueue.TimedWait(ms);
-          } else {
-            condQueue.Wait();
-          }
-        }
-        if (!i_Queue.empty()) {
-          out_n = i_Queue.front();
-          i_Queue.pop_front();
-          ret = true;
-        }
-        return ret;
-      }
-
-      void WakeUp() {
-        AutoLock guard(queueLock);
-        condQueue.Broadcast();
-      }
-
-      bool Empty() {
-        return i_Queue.empty();
-      }
-
-      void ClearRecvQueue() {
-        AutoLock guard(queueLock);
-        i_Queue.clear();
-      }
-    private:
-      list<Notification> i_Queue;
-      Lock queueLock;
-      ConditionVariable condQueue;
-  };
-
-  class FastPaxosElection: public Election {
-    public:
+      //interface inherited from Election
       virtual Vote lookForLeader();
-      virtual void Shutdown() {
-        stop = true;
-        i_nQueue.WakeUp();
-        recvWorker.Stop();
-      }
+      virtual void Shutdown();
 
-      FastPaxosElection(QuorumPeer* myself, QuorumCnxMgr * mgr)
-          : logicalclock(0)
-      , self(myself)
-      , cnxMgr(mgr)
-      , stop(false)
-      , recvWorker(this, myself, mgr, &i_nQueue) {
-      }
-
-      virtual ~FastPaxosElection() {
-      }
-
-      void getVote(Vote& v) {
-        //todo, need a lock here?
-        v.id = proposedLeader;
-        v.zxid = proposedZxid;
-        v.electionEpoch = -1;
-        v.peerEpoch = proposedEpoch;
-        v.state = LOOKING;
-      }
-
-      int64 getLogicalclock() {
-        //todo, need a lock here?
-        //AutoLock guard(proposalLock);
-        return logicalclock;
-      }
+      //interface called in ElectionCnxMgr to handle received message
+      virtual void HandleIncomingPeerMsg(int64 sid, const char * msg, int len);
+      virtual void HandlePeerShutdown(int64 sid);
 
     protected:
       typedef map<int64, Vote> VoteMap;
@@ -157,48 +88,38 @@ namespace ZABCPP {
       bool termPredicate(const VoteMap& vm, const Vote& v);
       bool checkLeader(const VoteMap& vm, int64 leader, int64 electionEpoch);
       void leaveInstance(const Vote& v);
+
+      Notification * pollQueue(int64 milli_sec);
+
+      void getVote(Vote& v);
+      int64 getLogicalclock();
+    protected:
+      //function for handling peer message
+      string* getPeerMsgBuf(int64 sid);
+      void    removePeerMsgBuf(int64 sid);
+      void    cleanupPeerMsgBuf();
+      void    handleNotification(const Notification& n);
     private:
-      bool pollQueue(int64 max_t_in_ms, Notification& out_n) {
-        return i_nQueue.pollQueue(max_t_in_ms, out_n);
-      }
+      //members for election
+      QuorumPeer* self;
+      QuorumCnxMgr* cnxMgr;
+      bool stop;
 
-      //inside recv worker
-      class RecvWorker: public Thread {
-        public:
-          RecvWorker(FastPaxosElection *el, QuorumPeer* peer, QuorumCnxMgr* mgr, NotificationQ* q)
-              : Thread("Election Recv worker"), i_el(el), self(peer), cnxMgr(mgr), i_nQueue(q) {
-
-          }
-
-          ~RecvWorker() {
-
-          }
-
-        protected:
-          virtual void Run();
-          virtual void ShuttingDown(){
-            INFO("Task:"<<thread_name()<<" id:"<<thread_id()<<", Wake up and quit");
-            cnxMgr->wakeupRecvQueue();
-          }
-
-        private:
-          FastPaxosElection* i_el;
-          QuorumPeer* self;
-          QuorumCnxMgr* cnxMgr;
-          NotificationQ* i_nQueue;
-      };
-    private:
       volatile int64 logicalclock; /* Election instance */
       int64 proposedLeader;
       int64 proposedZxid;
       int64 proposedEpoch;
-      QuorumPeer* self;
-      QuorumCnxMgr* cnxMgr;
-      bool stop;
       Lock proposalLock;
 
-      NotificationQ i_nQueue;
-      RecvWorker recvWorker;
+    private:
+      //members for handling incoming election message from peer
+      typedef CircleQueue<Notification>     CircleNotifcationQueue;
+      typedef map<int64, string*>           PeerMsgBufMap;
+
+      PeerMsgBufMap                         peerMsgBufMap;
+      CircleNotifcationQueue                notificationQueue;
+      WaitableEvent                         weNotification;
+
       DISALLOW_COPY_AND_ASSIGN(FastPaxosElection);
   };
 

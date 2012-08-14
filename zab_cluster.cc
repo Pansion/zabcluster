@@ -42,7 +42,7 @@ static void  handle_signal(evutil_socket_t fd, short event, void *arg) {
 }
 
 int main(int argc, char *argv[]) {
-  log_instance->setLogLevel(INFO_LOG_LEVEL);
+  log_instance->setLogLevel(WARN_LOG_LEVEL);
   string cfg = "zoo.cfg";
   if (1 < argc) {
     cfg = argv[1];

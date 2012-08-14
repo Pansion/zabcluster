@@ -27,6 +27,7 @@
 #define CLIENT_HANDLER_H_
 
 #include "client_protocol/redis_protocol.h"
+#include "base/basictypes.h"
 #include <map>
 
 using namespace std;
@@ -51,6 +52,9 @@ namespace ZABCPP{
       virtual ~ClientHandlerInterface(){};
     protected:
       ZabQuorumServer*                    zabServer;
+
+    private:
+      DISALLOW_COPY_AND_ASSIGN(ClientHandlerInterface);
   };
 
   class ClientHandlerRedis: public ClientHandlerInterface{
@@ -68,6 +72,7 @@ namespace ZABCPP{
     private:
       typedef map<int, struct redisClient*>      ClientMap;
       ClientMap                           clientMap;
+      DISALLOW_COPY_AND_ASSIGN(ClientHandlerRedis);
   };
 }
 

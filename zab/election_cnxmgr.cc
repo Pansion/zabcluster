@@ -38,33 +38,47 @@
 #include <netinet/tcp.h>
 #include <string.h>
 namespace ZABCPP {
+
+#define FOR_EACH_HANDLER(HandlerType, HandlerList, func)  \
+  do {                                                        \
+    for(set<HandlerType>::iterator iter = HandlerList.begin();iter != HandlerList.end();iter++)\
+    {                                                                                         \
+      HandlerType h = *iter;                                                                  \
+      h->func;                                                                                \
+    }                                                                                         \
+  } while (0)
+
+#define OpenScope         if(1)
+
   QuorumCnxMgr::QuorumCnxMgr(QuorumPeerConfig* Cfg)
       :Thread("Quorum Cnx Mgr")
   , peerConfig(Cfg)
   , ebase(NULL)
   , numRetries(0)
-  , recvQueue(RECV_CAPACITY)
   , weRecv(false, false){
-
+    wakeup_pipe[PIPE_OUT] = -1;
+    wakeup_pipe[PIPE_IN] = -1;
+    msg_pipe[PIPE_OUT] = -1;
+    msg_pipe[PIPE_IN] = -1;
   }
 
   QuorumCnxMgr::~QuorumCnxMgr() {
 
   }
 
+  void QuorumCnxMgr::RegisterHandler(ElectionMsgHandlerInterface* h) {
+    AutoLock guard(handlerLock);
+    handlerSet.insert(h);
+  }
+
+  void QuorumCnxMgr::UnregisterHandler(ElectionMsgHandlerInterface* h) {
+    AutoLock guard(handlerLock);
+    handlerSet.erase(h);
+  }
+
   void QuorumCnxMgr::toSend(int64 sid, ByteBuffer* buf) {
-    if (sid == peerConfig->serverId) {
-      Message * msg = new Message();
-      //the bytebuffer contained packet len in head
-      //remove it first
-      msg->buffer.WriteBytes(buf->Data()+sizeof(int32), buf->Length());
-      msg->sid = sid;
-      delete buf;
-      addToRecvQueue(msg);
-    } else {
       getQueue(sid)->PushBack(buf);
       msgReady(sid);
-    }
   }
 
   void QuorumCnxMgr::connectOne(int64 sid) {
@@ -134,7 +148,6 @@ namespace ZABCPP {
       close(sock);
       return;
     } else {
-      // create sender and recv worker
       // NOTE:should add peer first to avoid race-condition on find new peer
       addPeer(sock, sid);
       addConnection(sock);
@@ -142,23 +155,6 @@ namespace ZABCPP {
     return;
   }
 
-  Message* QuorumCnxMgr::pollRecvQueue(int64 max_time_in_ms) {
-    Message * msg = recvQueue.PopFront();
-    if (msg == NULL) {
-      if (0 < max_time_in_ms) {
-        weRecv.TimedWait(max_time_in_ms);
-      } else {
-        weRecv.Wait();
-      }
-      msg = recvQueue.PopFront();
-    }
-    return msg;
-  }
-
-  void QuorumCnxMgr::addToRecvQueue(Message* msg) {
-    recvQueue.PushBack(msg);
-    weRecv.Signal();
-  }
 
   bool QuorumCnxMgr::haveDelivered() {
     bool ret = true;
@@ -172,14 +168,6 @@ namespace ZABCPP {
       }
     }
     return ret;
-  }
-
-  void QuorumCnxMgr::wakeupRecvQueue() {
-    weRecv.Signal();
-    while (!weRecv.IsSignaled()){
-      INFO("Failed to signal reve queue");
-      weRecv.Signal();
-    }
   }
 
   //interfaces to libevent
@@ -275,18 +263,25 @@ namespace ZABCPP {
   }
 
   void QuorumCnxMgr::CleanUp() {
+
+    cleanupEvents(eventMap);
+    cleanupEvents(wEventMap);
+
+    cleanupPipe(wakeup_pipe);
+    cleanupPipe(msg_pipe);
+
     if (ebase != NULL) {
       event_base_free(ebase);
       ebase = NULL;
     }
-    cleanupPipe(wakeup_pipe);
-    cleanupPipe(msg_pipe);
+
     cleanupSockBuf();
-    cleanupEvents(eventMap);
-    cleanupEvents(wEventMap);
     cleanupAllSendQueue();
-    cleanupRecvQueue();
     cleanupLastMsg();
+
+    OpenScope {
+      handlerSet.clear();
+    }
     numRetries = 0;
   }
 
@@ -341,13 +336,15 @@ namespace ZABCPP {
       removeConnection(sock);
       removeSockBuf(sock);
       removePeer(sock);
+      OpenScope {
+        FOR_EACH_HANDLER(ElectionMsgHandlerInterface*, handlerSet, HandlePeerShutdown(sid));
+      }
       return;
     }
 
-    string * buf = getSockBuf(sock);
-    buf->append(msg, readnum);
-    processMsg(sock, buf, sid);
-
+    OpenScope {
+      FOR_EACH_HANDLER(ElectionMsgHandlerInterface*, handlerSet, HandleIncomingPeerMsg(sid, msg, readnum));
+    }
   }
 
   //called when send queue have message
@@ -357,7 +354,6 @@ namespace ZABCPP {
       DEBUG("could not find connection for server "<<sid);
       return;
     }
-
     //create a write event
     addWriteEvent(fd);
   }
@@ -418,27 +414,6 @@ namespace ZABCPP {
     } else {
       ERROR("Could not find server on connection "<<fd);
       removeWriteEvent(fd);
-    }
-  }
-
-  void QuorumCnxMgr::processMsg(int fd, string* buf, int64 sid) {
-    while (sizeof(uint32) <= buf->length()) {
-      ByteBuffer byteBuf(buf->data(), buf->length());
-      int32 packetLen = 0;
-      byteBuf.ReadInt32(packetLen);
-      if ((0 < packetLen) && (packetLen < PACKETMAXSIZE)) {
-        int totalLen = sizeof(uint32) + packetLen;
-        if (totalLen <= (int) buf->length()) {
-          Message* newMsg = new Message();
-          newMsg->sid = sid;
-          newMsg->buffer.WriteBytes(byteBuf.Data(), packetLen);
-          buf->erase(0, totalLen);
-          addToRecvQueue(newMsg);
-        } else {
-          TRACE("Message was only "<<buf->length()<<" required "<<totalLen);
-          return;
-        }
-      }
     }
   }
 
@@ -586,7 +561,6 @@ namespace ZABCPP {
     return fd;
   }
 
-
   string * QuorumCnxMgr::getSockBuf(int sock) {
     string * ret = NULL;
     SockBufMap::iterator iter = sockBufMap.find(sock);
@@ -707,10 +681,6 @@ namespace ZABCPP {
       }
     }
     sendQueueMap.clear();
-  }
-
-  void QuorumCnxMgr::cleanupRecvQueue() {
-    recvQueue.Clear();
   }
 
   void QuorumCnxMgr::cleanupLastMsg() {

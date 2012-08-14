@@ -27,6 +27,7 @@
 #include "election_strategy.h"
 #include "base/logging.h"
 #include "zab_utils.h"
+#include "zab_constant.h"
 #include <map>
 #include <sys/time.h>
 
@@ -36,18 +37,6 @@ namespace ZABCPP {
 
   static const int finalizeWait = 200;
   static const int maxNotificationInterval = 60000;
-  static const int POLL_MSG_INTERVAL = 3;
-
-  static void MsgToNotification(Message* msg, Notification& n) {
-    if (msg != NULL) {
-      n.sid = msg->sid;
-      msg->buffer.ReadInt32(n.state);
-      msg->buffer.ReadInt64(n.leader);
-      msg->buffer.ReadInt64(n.zxid);
-      msg->buffer.ReadInt64(n.electionEpoch);
-      msg->buffer.ReadInt64(n.peerEpoch);
-    }
-  }
 
   Election* ElectionStrategyFactory::getElectionStrategy(ElectionStrategy type, QuorumPeer* self, QuorumCnxMgr * mgr) {
     Election * el = NULL;
@@ -60,61 +49,158 @@ namespace ZABCPP {
     }
     return el;
   }
+  //--------------------------FastPaxosElection-----------------------
+  FastPaxosElection::FastPaxosElection(QuorumPeer* myself, QuorumCnxMgr * mgr)
+  :self(myself),
+   cnxMgr(mgr),
+   stop(false),
+   notificationQueue(RECV_CAPACITY),
+   logicalclock(0),
+   proposedLeader(-1),
+   proposedZxid(-1),
+   proposedEpoch(-1),
+   weNotification(false, false) {
+    cnxMgr->RegisterHandler(this);
+  }
 
-  void FastPaxosElection::RecvWorker::Run() {
-    while (!stopping_) {
-      Message* msg = cnxMgr->pollRecvQueue(POLL_MSG_INTERVAL * 1000);
-      if (stopping_)
-        return;
-      if (msg == NULL)
-        continue;
+  FastPaxosElection::~FastPaxosElection() {
+    cleanupPeerMsgBuf();
+  }
 
-      Notification n;
-      MsgToNotification(msg, n);
-      delete msg;
-      DEBUG("get new notification: id "<<ZxidUtils::HexStr(n.sid)
-      <<" proposed leader:"<<ZxidUtils::HexStr(n.leader)
-      <<" proposed zxid:"<<ZxidUtils::HexStr(n.zxid)
-      <<" peer electionEpoch:"<<ZxidUtils::HexStr(n.electionEpoch)
-      <<" peerEpoch:"<<ZxidUtils::HexStr(n.peerEpoch)
-      <<" peerState:"<<ZxidUtils::HexStr(n.state));
+  //interface called in ElectionCnxMgr to handle received message
+  void FastPaxosElection::HandleIncomingPeerMsg(int64 sid, const char * msg, int len) {
+    string * buf = getPeerMsgBuf(sid);
+    buf->append(msg, len);
 
-      if (self->getPeerState() == LOOKING) {
-        i_nQueue->PushBack(n);
-
-        if ((n.state == LOOKING) && (n.electionEpoch < i_el->getLogicalclock())) {
-          Vote v;
-          i_el->getVote(v);
-          ByteBuffer* buf = new ByteBuffer();
-          buf->WriteInt32(sizeof(int32)+sizeof(int64)*4);
-          buf->WriteInt32((int32) self->getPeerState());
-          buf->WriteInt64(v.id);
-          buf->WriteInt64(v.zxid);
-          buf->WriteInt64(i_el->getLogicalclock());
-          buf->WriteInt64(v.peerEpoch);
-          cnxMgr->toSend(n.sid, buf);
+    while (sizeof(uint32) <= buf->length()) {
+      ByteBuffer byteBuf(buf->data(), buf->length());
+      int32 packetLen = 0;
+      byteBuf.ReadInt32(packetLen);
+      if ((0 < packetLen) && (packetLen < PACKETMAXSIZE)) {
+        int totalLen = sizeof(uint32) + packetLen;
+        if (totalLen <= (int) buf->length()) {
+          Notification n;
+          n.sid = sid;
+          byteBuf.ReadInt32(n.state);
+          byteBuf.ReadInt64(n.leader);
+          byteBuf.ReadInt64(n.zxid);
+          byteBuf.ReadInt64(n.electionEpoch);
+          byteBuf.ReadInt64(n.peerEpoch);
+          handleNotification(n);
+          buf->erase(0, totalLen);
+        } else {
+          TRACE("Message was only "<<buf->length()<<" required "<<totalLen);
+          return;
         }
-      } else {
-        /*
-         * If this server is not looking, but the one that sent the ack
-         * is looking, then send back what it believes to be the leader.
-         */
-        Vote current = self->getCurrentVote();
-        if (n.state == LOOKING) {
-          DEBUG("Sending new notification.My id="<<ZxidUtils::HexStr(self->getId())
-          <<" recipient="<<ZxidUtils::HexStr(n.sid)
-          <<" zxid="<<ZxidUtils::HexStr(current.zxid)
-          <<" leader="<<ZxidUtils::HexStr(current.id));
+      }
+    }
+  }
 
-          ByteBuffer* buf = new ByteBuffer();
-          buf->WriteInt32(sizeof(int32) + sizeof(int64)*4);
-          buf->WriteInt32((int32) self->getPeerState());
-          buf->WriteInt64(current.id);
-          buf->WriteInt64(current.zxid);
-          buf->WriteInt64(i_el->getLogicalclock());
-          buf->WriteInt64(current.peerEpoch);
-          cnxMgr->toSend(n.sid, buf);
-        }
+  void FastPaxosElection::HandlePeerShutdown(int64 sid) {
+    removePeerMsgBuf(sid);
+  }
+
+  string* FastPaxosElection::getPeerMsgBuf(int64 sid) {
+    string * ret = NULL;
+    PeerMsgBufMap::iterator iter = peerMsgBufMap.find(sid);
+    if (iter != peerMsgBufMap.end()) {
+      ret = iter->second;
+    } else {
+      ret = new string();
+      peerMsgBufMap.insert(pair<int64, string*>(sid, ret));
+    }
+    return ret;
+  }
+
+  void    FastPaxosElection::removePeerMsgBuf(int64 sid) {
+    PeerMsgBufMap::iterator iter = peerMsgBufMap.find(sid);
+    if (iter != peerMsgBufMap.end()) {
+      string * b = iter->second;
+      if (b != NULL) {
+        delete b;
+      }
+      peerMsgBufMap.erase(iter);
+    }
+  }
+
+  void    FastPaxosElection::cleanupPeerMsgBuf() {
+    for(PeerMsgBufMap::iterator iter = peerMsgBufMap.begin();
+        iter != peerMsgBufMap.end();
+        iter ++) {
+      string * b = iter->second;
+      if (b != NULL) {
+        delete b;
+      }
+    }
+    peerMsgBufMap.clear();
+  }
+
+  void FastPaxosElection::getVote(Vote& v) {
+    AutoLock guard(proposalLock);
+    v.id = proposedLeader;
+    v.zxid = proposedZxid;
+    v.electionEpoch = -1;
+    v.peerEpoch = proposedEpoch;
+    v.state = LOOKING;
+  }
+
+  int64 FastPaxosElection::getLogicalclock() {
+    AutoLock guard(proposalLock);
+    return logicalclock;
+  }
+
+  void FastPaxosElection::handleNotification(const Notification& n) {
+    DEBUG("get new notification: id "<<ZxidUtils::HexStr(n.sid)
+    <<" proposed leader:"<<ZxidUtils::HexStr(n.leader)
+    <<" proposed zxid:"<<ZxidUtils::HexStr(n.zxid)
+    <<" peer electionEpoch:"<<ZxidUtils::HexStr(n.electionEpoch)
+    <<" peerEpoch:"<<ZxidUtils::HexStr(n.peerEpoch)
+    <<" peerState:"<<ZxidUtils::HexStr(n.state));
+
+    if (self->getPeerState() == LOOKING) {
+      //create new node in queue
+      Notification * newNode = new Notification();
+      newNode->electionEpoch = n.electionEpoch;
+      newNode->leader = n.leader;
+      newNode->peerEpoch = n.peerEpoch;
+      newNode->sid = n.sid;
+      newNode->state = n.state;
+      newNode->zxid = n.zxid;
+      notificationQueue.PushBack(newNode);
+      weNotification.Signal();
+
+      if ((n.state == LOOKING) && (n.electionEpoch < getLogicalclock())) {
+        Vote v;
+        getVote(v);
+        ByteBuffer* buf = new ByteBuffer();
+        buf->WriteInt32(sizeof(int32)+sizeof(int64)*4);
+        buf->WriteInt32((int32) self->getPeerState());
+        buf->WriteInt64(v.id);
+        buf->WriteInt64(v.zxid);
+        buf->WriteInt64(getLogicalclock());
+        buf->WriteInt64(v.peerEpoch);
+        cnxMgr->toSend(n.sid, buf);
+      }
+    } else {
+      /*
+       * If this server is not looking, but the one that sent the ack
+       * is looking, then send back what it believes to be the leader.
+       */
+      Vote current = self->getCurrentVote();
+      if (n.state == LOOKING) {
+        DEBUG("Sending new notification.My id="<<ZxidUtils::HexStr(self->getId())
+        <<" recipient="<<ZxidUtils::HexStr(n.sid)
+        <<" zxid="<<ZxidUtils::HexStr(current.zxid)
+        <<" leader="<<ZxidUtils::HexStr(current.id));
+
+        ByteBuffer* buf = new ByteBuffer();
+        buf->WriteInt32(sizeof(int32) + sizeof(int64)*4);
+        buf->WriteInt32((int32) self->getPeerState());
+        buf->WriteInt64(current.id);
+        buf->WriteInt64(current.zxid);
+        buf->WriteInt64(getLogicalclock());
+        buf->WriteInt64(current.peerEpoch);
+        cnxMgr->toSend(n.sid, buf);
       }
     }
   }
@@ -185,7 +271,7 @@ namespace ZABCPP {
     <<", my id="<<ZxidUtils::HexStr(self->getId())
     <<", my state="<<ZxidUtils::HexStr((int32)self->getPeerState())
     <<", my peerEpoch="<<ZxidUtils::HexStr(v.peerEpoch));
-    i_nQueue.ClearRecvQueue();
+    notificationQueue.Clear();
   }
 
   void FastPaxosElection::sendNotifications() {
@@ -198,15 +284,33 @@ namespace ZABCPP {
           <<ZxidUtils::HexStr(iter->first)<<" (recipient),"
           <<ZxidUtils::HexStr(self->getId())<<" (myid),"
           <<ZxidUtils::HexStr(proposedEpoch)<<" (n.peerEpoch)");
-      ByteBuffer * n = new ByteBuffer();
-      n->WriteInt32(sizeof(int32)+sizeof(int64)*4);
-      n->WriteInt32((int32) self->getPeerState());
-      n->WriteInt64(proposedLeader);
-      n->WriteInt64(proposedZxid);
-      n->WriteInt64(logicalclock);
-      n->WriteInt64(proposedEpoch);
-      cnxMgr->toSend(iter->first, n);
+      if (iter->first != self->getId()) {
+        ByteBuffer * n = new ByteBuffer();
+        n->WriteInt32(sizeof(int32)+sizeof(int64)*4);
+        n->WriteInt32((int32) self->getPeerState());
+        n->WriteInt64(proposedLeader);
+        n->WriteInt64(proposedZxid);
+        n->WriteInt64(logicalclock);
+        n->WriteInt64(proposedEpoch);
+        cnxMgr->toSend(iter->first, n);
+      } else {
+        Notification * n = new Notification();
+        n->state = self->getPeerState();
+        n->leader = proposedLeader;
+        n->zxid = proposedZxid;
+        n->peerEpoch = proposedEpoch;
+        n->electionEpoch = logicalclock;
+        n->sid = iter->first;
+        notificationQueue.PushBack(n);
+      }
     }
+  }
+
+  Notification * FastPaxosElection::pollQueue(int64 milli_sec) {
+    if(notificationQueue.Empty()) {
+      weNotification.TimedWait(milli_sec);
+    }
+    return notificationQueue.PopFront();
   }
 
   Vote FastPaxosElection::lookForLeader() {
@@ -215,9 +319,7 @@ namespace ZABCPP {
 
     int notTimeout = finalizeWait;
 
-    if (!recvWorker.IsRunning())
-      recvWorker.Start();
-    {
+    if(1) {
       AutoLock guard(proposalLock);
       logicalclock++;
       updateProposal(self->getId(), self->getLastZxid(), self->getCurrentEpoch());
@@ -227,14 +329,13 @@ namespace ZABCPP {
     sendNotifications();
 
     while ((self->getPeerState() == LOOKING) && (!stop)) {
-      Notification n;
-      bool ret = i_nQueue.pollQueue(notTimeout * 1000, n);
+      Notification * node = pollQueue(notTimeout * 1000);
 
       if (stop) {
         break;
       }
 
-      if (!ret) {
+      if (node == NULL) {
         if (cnxMgr->haveDelivered()) {
           sendNotifications();
         } else {
@@ -248,6 +349,17 @@ namespace ZABCPP {
         notTimeout = (tmpTimeOut < maxNotificationInterval ? tmpTimeOut : maxNotificationInterval);
         INFO("Notification time out: "<<notTimeout);
       } else {
+
+        //FIXME UGLY.yes. below are ugly copy actions.will refactory it later
+        Notification n;
+        n.electionEpoch = node->electionEpoch;
+        n.leader = node->leader;
+        n.peerEpoch = node->peerEpoch;
+        n.sid = node->sid;
+        n.state = node->state;
+        n.zxid = node->zxid;
+        delete node;
+
         //todo, need to check if sid was in quorum set
         if (n.sid) {
           switch (n.state) {
@@ -283,11 +395,10 @@ namespace ZABCPP {
               if (termPredicate(recvset, newv)) {
 
                 // Verify if there is any change in the proposed leader
-                Notification n;
-                bool result = false;
-                while ((result = i_nQueue.pollQueue(finalizeWait * 1000, n)) != false) {
-                  if (totalOrderPredicate(n.leader, n.zxid, n.peerEpoch, proposedLeader, proposedZxid, proposedEpoch)) {
-                    i_nQueue.PushBack(n);
+                Notification* n;
+                while ((n = pollQueue(finalizeWait * 1000)) != NULL) {
+                  if (totalOrderPredicate(n->leader, n->zxid, n->peerEpoch, proposedLeader, proposedZxid, proposedEpoch)) {
+                    notificationQueue.PushBack(n);
                     break;
                   }
                 }
@@ -296,7 +407,7 @@ namespace ZABCPP {
                  * This predicate is true once we don't read any new
                  * relevant message from the reception queue
                  */
-                if (!result) {
+                if (n == NULL) {
                   self->setPeerState((proposedLeader == self->getId()) ? LEADING : FOLLOWING);
                   leaveInstance(newv);
                   return newv;
@@ -350,6 +461,11 @@ namespace ZABCPP {
     }
     Vote nv(-1, -1, -1, -1);
     return nv;
+  }
+
+  void FastPaxosElection::Shutdown() {
+    stop = true;
+    weNotification.Signal();
   }
 }
 

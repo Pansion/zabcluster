@@ -28,7 +28,7 @@
 
 #include <map>
 #include <list>
-#include <vector>
+#include <set>
 #include "base/byte_buffer.h"
 #include "base/thread.h"
 #include "base/lock.h"
@@ -43,13 +43,20 @@ using namespace std;
 
 namespace ZABCPP{
 
-  class Message {
+  class ElectionMsgHandlerInterface {
     public:
-      ByteBuffer buffer;
-      int64 sid;
+      ElectionMsgHandlerInterface(){};
+      virtual ~ElectionMsgHandlerInterface(){};
+
+      //interface called in Election Cnx Mgr to handle received message
+      virtual void HandleIncomingPeerMsg(int64 sid, const char * msg, int len) = 0;
+      virtual void HandlePeerShutdown(int64 sid) = 0;
+    private:
+      DISALLOW_COPY_AND_ASSIGN(ElectionMsgHandlerInterface);
   };
 
   typedef CircleQueue<ByteBuffer>                 CircleByteBufferQueue;
+
   //merged recvworker/listener/sendworker into one thread.
   class QuorumCnxMgr : public Thread{
     public:
@@ -60,18 +67,13 @@ namespace ZABCPP{
       void connectAll();
       void connectOne(int64 sid);
 
-      Message* pollRecvQueue(int64 max_time_in_ms);
-      void addToRecvQueue(Message* msg);
+      void RegisterHandler(ElectionMsgHandlerInterface* );
+      void UnregisterHandler(ElectionMsgHandlerInterface*);
+
       bool haveDelivered();
-      void wakeupRecvQueue();
 
       QuorumPeerConfig* getPeerConfig() const {
         return peerConfig;
-      }
-
-
-      void clearRecvQueue() {
-        recvQueue.Clear();
       }
 
     public:
@@ -109,8 +111,8 @@ namespace ZABCPP{
 
       //called when fd can write
       void onMsgCandSend(int fd);
+
     private:
-      typedef CircleQueue<Message>                    CircleMessageQueue;
       typedef map<int64, ByteBuffer*>                 LastMessageMap;
       typedef set<int64>                              LastMsgFlag;
       typedef map<int64, CircleByteBufferQueue*>      SendQueueMap;
@@ -118,15 +120,14 @@ namespace ZABCPP{
       typedef map<int, int64>                         Sock2SidMap;
       typedef map<int, struct event*>                 EventMap;
       typedef map<int, string*>                       SockBufMap;
+      typedef set<ElectionMsgHandlerInterface*>       HanlderSet;
 
       enum {
         PIPE_OUT = 0,
         PIPE_IN
       };
     private:
-      void processMsg(int sock, string* buf, int64 sid);
       void initiateConnection(int sock, int64 sid);
-
       void addConnection(int fd);
       void removeConnection(int fd);
       void handleNewConnection(int fd);
@@ -162,28 +163,30 @@ namespace ZABCPP{
       void cleanupLastMsg();
 
     private:
-      QuorumPeerConfig* peerConfig;
-      struct event_base* ebase;
-      int wakeup_pipe[2];
-      int msg_pipe[2];
-      int numRetries;
+      QuorumPeerConfig*         peerConfig;
+      struct event_base*        ebase;
+      int                       wakeup_pipe[2];
+      int                       msg_pipe[2];
+      int                       numRetries;
 
-      EventMap  eventMap;
-      EventMap  wEventMap;
-      //recv queue
-      CircleMessageQueue recvQueue;
+      EventMap                  eventMap;
+      EventMap                  wEventMap;
 
-      SockBufMap  sockBufMap;
-      Sid2SockMap sid2SockMap;
-      Sock2SidMap sock2SidMap;
-      SendQueueMap sendQueueMap;
-      LastMessageMap lastMessageSent;
-      LastMsgFlag lastMsgFlag;
-      Lock connectLock;
-      Lock sendQueueLock;
-      Lock eventLock;
-      Lock peerLock;
-      WaitableEvent     weRecv;
+      HanlderSet                handlerSet;
+
+      SockBufMap                sockBufMap;
+      Sid2SockMap               sid2SockMap;
+      Sock2SidMap               sock2SidMap;
+      SendQueueMap              sendQueueMap;
+      LastMessageMap            lastMessageSent;
+      LastMsgFlag               lastMsgFlag;
+
+      Lock                      handlerLock;
+      Lock                      connectLock;
+      Lock                      sendQueueLock;
+      Lock                      eventLock;
+      Lock                      peerLock;
+      WaitableEvent             weRecv;
       DISALLOW_COPY_AND_ASSIGN(QuorumCnxMgr);
   };
 }

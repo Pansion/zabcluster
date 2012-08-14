@@ -121,15 +121,18 @@ namespace ZABCPP {
   }
 
   void QuorumPeer::Init() {
-    qcnxMgr.Start();
     if (electionAlg == NULL) {
       electionAlg = ElectionStrategyFactory::getElectionStrategy(FASTPAXOS_TCP, this, &qcnxMgr);
     }
+
     zDb = new ZabDBRedis(getId());
     zDb->SetServerAddr("127.0.0.1", peerConfig->zabDBPort);
     zDb->Startup();
+
     leader = new Leader(this, zDb);
     follower = new Follower(this, zDb);
+
+    qcnxMgr.Start();
   }
 
   void QuorumPeer::Run() {
@@ -177,15 +180,13 @@ namespace ZABCPP {
   }
 
   void QuorumPeer::CleanUp() {
+    INFO("Stop quorum cnx mgr");
+    qcnxMgr.Stop();
 
     INFO("Deleting election instance");
     if (electionAlg != NULL) {
       delete electionAlg;
     }
-
-    INFO("Stop quorum cnx mgr");
-
-    qcnxMgr.Stop();
 
     INFO("Deleting leader instance");
     if (leader != NULL) {
