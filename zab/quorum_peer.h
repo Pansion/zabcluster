@@ -33,7 +33,7 @@
 #include "election_strategy.h"
 #include "base/thread.h"
 #include "base/lock.h"
-#include "zabdb.h"
+#include "zabdb_redis.h"
 #include "leader.h"
 #include "follower.h"
 #include "quorum_server.h"
@@ -134,7 +134,7 @@ namespace ZABCPP {
       Election* electionAlg;
       Leader* leader;
       Follower* follower;
-      ZabDBInterface* zDb;
+      ZabDBRedis  zabDB;
 
       Lock stateLock;
       Lock voteLock;

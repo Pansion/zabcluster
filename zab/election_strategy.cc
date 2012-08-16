@@ -54,11 +54,11 @@ namespace ZABCPP {
   :self(myself),
    cnxMgr(mgr),
    stop(false),
-   notificationQueue(RECV_CAPACITY),
    logicalclock(0),
    proposedLeader(-1),
    proposedZxid(-1),
    proposedEpoch(-1),
+   notificationQueue(RECV_CAPACITY),
    weNotification(false, false) {
     cnxMgr->RegisterHandler(this);
   }

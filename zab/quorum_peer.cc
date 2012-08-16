@@ -54,7 +54,7 @@ namespace ZABCPP {
           electionAlg(NULL),
           leader(NULL),
           follower(NULL),
-          zDb(NULL){
+          zabDB(cfg->serverId){
 
   }
 
@@ -117,7 +117,7 @@ namespace ZABCPP {
   }
 
   int64 QuorumPeer::getLastZxid() {
-    return zDb->GetLastProcessedZxid();
+    return zabDB.GetLastProcessedZxid();
   }
 
   void QuorumPeer::Init() {
@@ -125,12 +125,11 @@ namespace ZABCPP {
       electionAlg = ElectionStrategyFactory::getElectionStrategy(FASTPAXOS_TCP, this, &qcnxMgr);
     }
 
-    zDb = new ZabDBRedis(getId());
-    zDb->SetServerAddr("127.0.0.1", peerConfig->zabDBPort);
-    zDb->Startup();
+    zabDB.SetServerAddr("127.0.0.1", peerConfig->zabDBPort);
+    zabDB.Startup();
 
-    leader = new Leader(this, zDb);
-    follower = new Follower(this, zDb);
+    leader = new Leader(this, &zabDB);
+    follower = new Follower(this, &zabDB);
 
     qcnxMgr.Start();
   }
@@ -201,11 +200,7 @@ namespace ZABCPP {
     }
 
     INFO("Shutdown ZAB db instance");
-    if (zDb != NULL) {
-      zDb->Shutdown();
-      delete zDb;
-      zDb = NULL;
-    }
+    zabDB.Shutdown();
   }
 
   void QuorumPeer::ShuttingDown() {

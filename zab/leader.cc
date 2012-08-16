@@ -603,16 +603,12 @@ namespace ZABCPP {
           lastProposed(0),
           zabServer(myself->getId(), this, z),
           clientCnxMgr(myself->clientPort()),
-          clientHandler(NULL),
           stop(false){
 
   }
 
   Leader::~Leader() {
-    if (clientHandler != NULL) {
-      delete clientHandler;
-      clientHandler = NULL;
-    }
+
   }
 
   void Leader::Lead() {
@@ -620,11 +616,8 @@ namespace ZABCPP {
 
     leaderState = ZAB_WAITING_EPOCH;
 
-    if (clientHandler == NULL) {
-      clientHandler = new ClientHandlerRedis();
-      clientHandler->SetZabServer(&zabServer);
-      clientCnxMgr.RegisterHanlder(clientHandler);
-    }
+    clientCnxMgr.RegisterHanlder(&clientHandler);
+    clientHandler.SetZabServer(&zabServer);
 
     while ((!stop) && (leaderState != ZAB_QUIT)) {
       switch (leaderState) {

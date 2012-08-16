@@ -45,11 +45,11 @@ namespace ZABCPP{
       virtual void SetZxid(int64 zxid);
       virtual int64 GetLastProcessedZxid();
       virtual void ProcessRequest(Request *);
-      virtual void SetServerAddr(const string& addr, int port);
-      virtual void Startup(){
+      void SetServerAddr(const string& addr, int port);
+      void Startup(){
         Start();
       }
-      virtual void Shutdown(){
+      void Shutdown(){
         Stop();
       }
       static void OnLibEventNotification(evutil_socket_t fd, short what, void *arg);

@@ -43,15 +43,9 @@ namespace ZABCPP{
       //handle client shutdown
       virtual void HandleClientShutdown(int) = 0;
 
-      //set active zabserver
-      void SetZabServer(ZabQuorumServer* z){
-        zabServer = z;
-      }
-    public:
-      ClientHandlerInterface():zabServer(NULL){};
-      virtual ~ClientHandlerInterface(){};
     protected:
-      ZabQuorumServer*                    zabServer;
+      ClientHandlerInterface(){};
+      virtual ~ClientHandlerInterface(){};
 
     private:
       DISALLOW_COPY_AND_ASSIGN(ClientHandlerInterface);
@@ -65,6 +59,11 @@ namespace ZABCPP{
       virtual void HandleIncomingRequest(int , const char *, int);
 
       virtual void HandleClientShutdown(int);
+
+      //set active zabserver
+      void SetZabServer(ZabQuorumServer* z){
+        zabServer = z;
+      }
     private:
       struct redisClient* getClient(int);
       void cleanupClients();
@@ -72,6 +71,7 @@ namespace ZABCPP{
     private:
       typedef map<int, struct redisClient*>      ClientMap;
       ClientMap                           clientMap;
+      ZabQuorumServer*                    zabServer;
       DISALLOW_COPY_AND_ASSIGN(ClientHandlerRedis);
   };
 }

@@ -50,17 +50,13 @@ namespace ZABCPP {
           epoch(0),
           sock(-1),
           zabServer(myself->getId(), this, z),
-          clientCnxMgr(myself->clientPort()),
-          clientHandler(NULL){
+          clientCnxMgr(myself->clientPort()) {
     wakeup_pipe[PIPE_OUT] = -1;
     wakeup_pipe[PIPE_IN] = -1;
   }
 
   Follower::~Follower() {
-    if (clientHandler != NULL) {
-      delete clientHandler;
-      clientHandler = NULL;
-    }
+
   }
 
   bool Follower::findLeader(string& addr, int& port) {
@@ -373,11 +369,8 @@ namespace ZABCPP {
       struct event* eRead = event_new(ebase, sock, EV_READ | EV_PERSIST, &Follower::OnLibEventNotification, this);
       event_add(eRead, NULL);
 
-      if (clientHandler == NULL) {
-        clientHandler = new ClientHandlerRedis();
-        clientHandler->SetZabServer(&zabServer);
-        clientCnxMgr.RegisterHanlder(clientHandler);
-      }
+      clientHandler.SetZabServer(&zabServer);
+      clientCnxMgr.RegisterHanlder(&clientHandler);
       //send register info to leader;
       QuorumPacket qp;
       qp.type = FOLLOWERINFO;

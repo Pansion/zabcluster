@@ -264,9 +264,9 @@ namespace ZABCPP {
       int64 lastProposed;
       Lock proposalMapLock;
 
-      ZabQuorumServer zabServer;
-      ClientCnxMgr    clientCnxMgr;
-      ClientHandlerInterface* clientHandler;
+      ZabQuorumServer       zabServer;
+      ClientCnxMgr          clientCnxMgr;
+      ClientHandlerRedis    clientHandler;
 
       bool stop;
   };

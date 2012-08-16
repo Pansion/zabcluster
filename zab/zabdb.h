@@ -37,14 +37,11 @@ namespace ZABCPP {
 
   class ZabDBInterface {
     public:
-      ZabDBInterface() {}
-      virtual ~ZabDBInterface() {}
-      virtual void SetZxid(int64 zxid) = 0;
       virtual int64 GetLastProcessedZxid() = 0;
       virtual void ProcessRequest(Request *) = 0;
-      virtual void SetServerAddr(const string& addr, int port) {}
-      virtual void Startup() = 0;
-      virtual void Shutdown() = 0;
+    protected:
+      ZabDBInterface() {};
+      virtual ~ZabDBInterface() {}
   };
 }
 

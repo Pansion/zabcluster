@@ -106,7 +106,7 @@ namespace ZABCPP {
 
       ZabQuorumServer zabServer;
       ClientCnxMgr    clientCnxMgr;
-      ClientHandlerInterface* clientHandler;
+      ClientHandlerRedis clientHandler;
   };
 }
 
